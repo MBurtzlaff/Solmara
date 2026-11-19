@@ -158,6 +158,10 @@ h2{ font-size:1.45em; } h3{ font-size:1.1em; }
 .maptabs .btn{min-width:48px}
 .mapinfo{margin:4px 0;text-align:center}
 @media (orientation:landscape) and (max-height:560px){ .mapview{height:62vh} }
+/* v0.2.2 autosave indicator: small, top-right, never blocks taps */
+#saved-ind{ position:fixed; top:calc(var(--sat) + 52px); right:calc(var(--sar) + 10px); z-index:95; background:rgba(8,12,48,0.88); color:#cfe8ff; border:1px solid rgba(248,224,112,0.7); border-radius:999px; padding:3px 10px; font-size:0.78rem; opacity:0; transform:translateY(-6px); transition:opacity .3s, transform .3s; pointer-events:none; }
+#saved-ind.show{ opacity:1; transform:translateY(0); }
+#title .ti-cont small{ white-space:normal; line-height:1.3; }
 </style>
 </head>
 <body data-mode="title">
@@ -200,7 +204,7 @@ h2{ font-size:1.45em; } h3{ font-size:1.1em; }
 // ---- 00_core.js ----
 // Shards of Solmara — core helpers
 const GAME_TITLE='Shards of Solmara';
-const GAME_VERSION='0.2.1';
+const GAME_VERSION='0.2.2';
 const PREFIX='sos_';
 let G=null;      // the game state (saved)
 let B=null;      // the current battle (not saved)
@@ -1237,7 +1241,7 @@ async function actHere(){ if(!G||B||MODALS.length) return;
   if(t==='S'){ const v=await ask('<p>Stairs lead down into darkness.</p>',[{label:'Go down',value:1,cls:'primary'},{label:'Stay',value:0}]); if(v) enterDungeon(fl.did,fl.fi+1,'U'); return; }
   if(t==='U'){ const v=await ask('<p>Go back up the stairs?</p>',[{label:'Go up',value:1,cls:'primary'},{label:'Stay',value:0}]); if(v) enterDungeon(fl.did,fl.fi-1,'S'); return; }
   if(t==='E'||t==='X'){ const v=await ask(`<p>${t==='X'?'A pillar of light rises where the guardian fell.':'Daylight shows at the end of the tunnel.'} Leave the dungeon?</p>`,[{label:'Leave',value:1,cls:'primary'},{label:'Stay',value:0}]); if(v) leaveDungeon(); return; }
-  if(t==='R'){ sfx('heal'); restParty(); refreshHUD(); log('💧 The spring restores everyone. (Saved.)'); autosave(); const v=await ask('<p>💧 The spring restores your party\'s HP and MP. Your game was saved.</p><p class="dim">You can also swap party members here.</p>',[{label:'Swap party',value:1},{label:'Continue',value:0,cls:'primary'}]); if(v) openPartySwap(); return; }
+  if(t==='R'){ sfx('heal'); restParty(); refreshHUD(); log('💧 The spring restores everyone. (Saved.)'); autosave('spring',{force:1}); const v=await ask('<p>💧 The spring restores your party\'s HP and MP. Your game was saved.</p><p class="dim">You can also swap party members here.</p>',[{label:'Swap party',value:1},{label:'Continue',value:0,cls:'primary'}]); if(v) openPartySwap(); return; }
   // facing something?
   const D=DIRS[G.dpos.f]; const ft=dCell(fl,G.dpos.x+D.x,G.dpos.y+D.y); if(ft==='D'||ft==='L'){ dungeonInput(0); return; }
   setMsg('Nothing to use here. ▲ walks forward, ◀ ▶ turn, ▼ turns around. 🗺 shows the automap.'); }
@@ -1538,7 +1542,7 @@ function openInn(){ const T=TOWNS[G.town]; const fallen=rosterChars().filter(c=>
   const p=panel(`🛏 ${T.name} Inn`,`${sceneImg('in_inn')}<p>"A warm bed and a hot meal, ${T.inn} gold for the whole company."${fallen?` <span class="good">Fallen friends are revived too.</span>`:''}</p>
     <div class="col"><button class="btn big primary" id="inn-rest" ${G.gold<T.inn?'disabled':''}>Rest — ${T.inn}g (full HP/MP, saves)</button>
     <button class="btn big" id="inn-swap">👥 Swap party members</button><button class="btn big" id="inn-save">💾 Save to a slot</button></div><p class="dim">You have ${fmt(G.gold)} gold. Resting also marks this inn as where you wake up if your party falls.</p>`);
-  p.querySelector('#inn-rest').onclick=()=>{ if(G.gold<T.inn) return; G.gold-=T.inn; restParty(true); G.lastInn=G.town; sfx('inn'); autosave(); toast('Rested. Everyone is fully healed. Game saved.'); closePanel(p); refreshHUD(); };
+  p.querySelector('#inn-rest').onclick=()=>{ if(G.gold<T.inn) return; G.gold-=T.inn; restParty(true); G.lastInn=G.town; sfx('inn'); autosave('inn',{force:1}); toast('Rested. Everyone is fully healed. Game saved.'); closePanel(p); refreshHUD(); };
   p.querySelector('#inn-swap').onclick=()=>openPartySwap(); p.querySelector('#inn-save').onclick=()=>openSaveMenu(); }
 
 // ---- shops ----
@@ -1809,9 +1813,10 @@ function tip(k){ if(prefGet('tips','on')!=='on') return; const seen=(prefGet('ti
     $('tip-ok').onclick=()=>el.classList.add('hidden'); $('tip-off').onclick=()=>{ prefSet('tips','off'); el.classList.add('hidden'); toast('Tips off. Turn them back on in ⚙ Settings.'); }; },350); }
 
 // ---- settings (every one reversible; reset button always here) ----
-const PREF_KEYS=['vol_music','vol_sfx','mute','text','speed','enc','tips','tips_seen','minimap','wzoom'];
+const PREF_KEYS=['autosave','vol_music','vol_sfx','mute','text','speed','enc','tips','tips_seen','minimap','wzoom'];
 function openSettings(){ const sel=(k,d,opts)=>{ const v=prefGet(k,d); return `<div class="setrow"><span>${opts.label}</span><div class="seg">${opts.v.map(([val,lab])=>`<button class="btn small ${v===val?'on':''}" data-k="${k}" data-v="${val}">${lab}</button>`).join('')}</div></div>`; };
-  const body=()=>`${sel('mute','off',{label:'Sound',v:[['off','🔊 On'],['on','🔇 Muted']]})}
+  const body=()=>`${sel('autosave','on',{label:'Autosave',v:[['on','On'],['off','Off']]})}<p class="dim tiny">Autosave saves as you walk, after battles and shopping, and when you leave the app. Inns, springs and shrines always save. Your 3 manual slots are never overwritten.</p>
+   ${sel('mute','off',{label:'Sound',v:[['off','🔊 On'],['on','🔇 Muted']]})}
    ${sel('vol_music','0.5',{label:'Music volume',v:[['0','Off'],['0.25','Low'],['0.5','Mid'],['0.8','High']]})}
    ${sel('vol_sfx','0.6',{label:'Effects volume',v:[['0','Off'],['0.3','Low'],['0.6','Mid'],['0.9','High']]})}
    ${sel('text','large',{label:'Text size',v:[['normal','Normal'],['large','Large'],['xlarge','X-Large']]})}
@@ -1835,7 +1840,7 @@ function openHelp(){ panel('❓ How to play',`<h3>Goal</h3><p>Recover the four S
  <h3>Battle</h3><p>Choose orders for everyone, then turns go by speed. Enemies have weaknesses — 🔥 Fire, ❄️ Ice, ⚡ Volt, ✨ Holy, 🌑 Dark. Analyze (Machinist) reveals them; the bestiary remembers. Back-row heroes take less physical damage but hit softer with melee weapons.</p>
  <h3>Building heroes</h3><p>Each level: +2 stat points. Lv ${PATH_LV}: choose one of two paths (locks the other). Lv ${DISC_LV}: choose a discipline. A temple can undo the latest choice for a lot of gold.</p>
  <h3>Gear trade-offs</h3><p>Armor weight lowers speed. Heavy armor also weakens spells. Two-handed weapons hit harder but block shields. Bows and guns work from the back row.</p>
- <h3>Saving</h3><p>The game autosaves at towns, dungeon floors and springs. Use 💾 Save for 3 manual slots, and Export a backup file now and then. Saves survive updates.</p>
+ <h3>Saving</h3><p>The game autosaves as you play: on every town, dungeon and floor change, after battles you win, after shopping, resting and gear changes, every half minute or so while you walk, and the moment you leave the app. Tap ▶ Continue on the title screen to pick up where you left off. Use 💾 Save for 3 manual slots, and Export a backup file now and then. Saves survive updates.</p>
  <h3>Updating on iPhone</h3><p>Open the game while online, swipe it closed, then open it again. Don't delete the home-screen icon (that would erase saves).</p>`); }
 
 // ---- 11_save.js ----
@@ -1878,16 +1883,16 @@ function loadState(obj){ let s=migrate(JSON.parse(JSON.stringify(obj))); const p
   closeAllPanels(); closeAllModals(); $('title').classList.add('hidden'); $('town').classList.add('hidden'); for(const c of rosterChars()) clampHPMP(c);
   if(G.mode==='town') enterTown(G.town); else if(G.mode==='dungeon'){ playMusic('dungeon'); } else { G.mode='world'; playMusic('world'); }
   refreshHUD(); questUpdate(); redraw(); }
-function openSaveMenu(){ if(B){ toast('Finish the battle first.'); return; } const body=()=>[1,2,3].map(i=>{ const s=readSave(SLOT_KEY(i)); return `<button class="btn lrow" data-s="${i}"><b>Slot ${i}</b><br><span class="dim">${s?summary(s):'Empty'}</span></button>`; }).join('')+`<p class="dim">Autosave: ${summary(readSave(AUTO_KEY))||'none yet'}</p>`;
+function openSaveMenu(){ if(B){ toast('Finish the battle first.'); return; } const body=()=>[1,2,3].map(i=>{ const s=readSave(SLOT_KEY(i)); return `<button class="btn lrow" data-s="${i}"><b>Slot ${i}</b><br><span class="dim">${s?summary(s):'Empty'}</span></button>`; }).join('')+`<p class="dim">Autosave (separate, never touches these slots): ${summary(readSave(AUTO_KEY))||'none yet'}</p>`;
   const p=panel('💾 Save game',body()); const bind=()=>p.querySelectorAll('[data-s]').forEach(b=>b.onclick=async()=>{ const i=b.dataset.s; if(readSave(SLOT_KEY(i))){ const v=await ask(`<p>Overwrite slot ${i}?</p>`,[{label:'Overwrite',value:1,cls:'primary'},{label:'Cancel',value:0}]); if(!v) return; }
     if(writeSave(SLOT_KEY(i))){ sfx('ok'); toast(`Saved to slot ${i}.`); autosave(); } p.refresh(null,body()); bind(); }); bind(); }
-function openLoadMenu(fromDefeat){ const rows=[['auto','Autosave',readSave(AUTO_KEY)],...[1,2,3].map(i=>['slot'+i,'Slot '+i,readSave(SLOT_KEY(i))])];
+function openLoadMenu(fromDefeat){ const rows=[['auto','Autosave',(typeof readAuto==='function'?readAuto():readSave(AUTO_KEY))],...[1,2,3].map(i=>['slot'+i,'Slot '+i,readSave(SLOT_KEY(i))])];
   const p=panel('📂 Load game',`${rows.map(([k,l,s])=>`<button class="btn lrow" data-l="${k}" ${s?'':'disabled'}><b>${l}</b><br><span class="dim">${s?summary(s):'Empty'}</span></button>`).join('')}
    <h3>Backup file</h3><p class="dim">Export saves all slots into one file (keep it in Files or iCloud). Import asks before replacing anything.</p>
    <div class="row"><button class="btn" id="ld-exp">⬆ Export saves</button><button class="btn" id="ld-imp">⬇ Import saves</button></div>`,{onBack:fromDefeat&&!G?showTitle:null});
-  p.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>{ const k=b.dataset.l; const s=k==='auto'?readSave(AUTO_KEY):readSave(SLOT_KEY(k.slice(4))); if(!s) return; try{ loadState(s); toast('Game loaded.'); }catch(e){ toast('That save could not be loaded: '+e.message); } });
+  p.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>{ const k=b.dataset.l; const s=k==='auto'?(typeof readAuto==='function'?readAuto():readSave(AUTO_KEY)):readSave(SLOT_KEY(k.slice(4))); if(!s) return; try{ loadState(s); toast('Game loaded.'); }catch(e){ toast('That save could not be loaded: '+e.message); } });
   p.querySelector('#ld-exp').onclick=exportSaves; p.querySelector('#ld-imp').onclick=pickImport; }
-function exportSaves(){ const bundle={format:'solmara-saves',version:SAVE_VERSION,game:GAME_VERSION,ts:Date.now(),auto:readSave(AUTO_KEY),slots:[1,2,3].map(i=>readSave(SLOT_KEY(i)))};
+function exportSaves(){ const bundle={format:'solmara-saves',version:SAVE_VERSION,game:GAME_VERSION,ts:Date.now(),auto:readSave(AUTO_KEY),autoPrev:readSave(PREFIX+'auto_prev'),slots:[1,2,3].map(i=>readSave(SLOT_KEY(i)))};
   if(!bundle.auto&&!bundle.slots.some(Boolean)){ toast('No saves to export yet.'); return; } const txt=JSON.stringify(bundle); const name='solmara-saves-'+new Date().toISOString().slice(0,10)+'.json';
   const blob=new Blob([txt],{type:'application/json'}); window._lastExport=txt;
   try{ const f=new File([blob],name,{type:'application/json'}); if(navigator.canShare&&navigator.canShare({files:[f]})){ navigator.share({files:[f],title:GAME_TITLE+' saves'}).catch(()=>{}); toast('Choose "Save to Files" to keep your backup.'); return; } }catch(e){}
@@ -1978,12 +1983,12 @@ function newGameState(o){ const g={v:SAVE_VERSION,mode:'world',pos:{x:TOWNS.corl
   const HL=HERO_LOOKS.find(h=>h.pic===o.pic)||HERO_LOOKS[0]; const look={skin:HL.skin,hair:HL.hair,eye:'#3a3a5a',coat:CLASSES[o.cls].color,long:!!HL.long,pic:HL.pic}; g.hero={name:o.name,look};
   const G0=G; G=g; const c=newChar('hero',{name:o.name,cls:o.cls,look,gear:HERO_GEAR[o.cls],bonus:ORIGINS[o.origin].bonus,row:o.cls==='arcanist'||o.cls==='acolyte'?'back':'front'}); g.chars.hero=c; ORIGINS[o.origin].perk(g); c.hp=maxHP(c); c.mp=maxMP(c); g.origin=o.origin; G=G0; return g; }
 function showTitle(){ stopMusic(); G=null; B=null; closeAllPanels(); closeAllModals(); $('town').classList.add('hidden'); $('battle').classList.add('hidden'); const t=$('title'); t.classList.remove('hidden');
-  const auto=readSave(AUTO_KEY); const art=IMG.title?'assets/title.webp':titleArt(); t.classList.toggle('painted',!!IMG.title);
+  const last=(typeof latestSave==='function')?latestSave():(readSave(AUTO_KEY)?{key:'auto',label:'Autosave',s:readSave(AUTO_KEY)}:null); const auto=last&&last.s; const art=IMG.title?'assets/title.webp':titleArt(); t.classList.toggle('painted',!!IMG.title);
   t.innerHTML=`<div class="titlebox"><img class="titleart" src="${art}"><h1>Shards of<br>Solmara</h1><p class="sub">An old-school quest of dungeons, companions and hard choices</p>
-   <div class="col">${auto?`<button class="btn big primary" id="ti-cont">▶ Continue<small>${summary(auto)}</small></button>`:''}
+   <div class="col">${auto?`<button class="btn big primary ti-cont" id="ti-cont">▶ Continue<small>${typeof continueLine==='function'?continueLine(last):summary(auto)}</small></button>`:''}
    <button class="btn big ${auto?'':'primary'}" id="ti-new">✦ New game</button><button class="btn big" id="ti-load">📂 Load / import</button>
    <div class="row"><button class="btn" id="ti-set">⚙ Settings</button><button class="btn" id="ti-help">❓ How to play</button></div></div><p class="dim tiny">v${GAME_VERSION}</p></div>`;
-  if(auto) $('ti-cont').onclick=()=>{ audUnlock(); try{ loadState(auto); }catch(e){ toast('Autosave could not load: '+e.message); } };
+  if(auto) $('ti-cont').onclick=()=>{ audUnlock(); try{ loadState(auto); toast(`Welcome back! (${last.label})`); }catch(e){ toast('That save could not load: '+e.message); openLoadMenu(true); } };
   $('ti-new').onclick=()=>{ audUnlock(); openCreate(); }; $('ti-load').onclick=()=>{ audUnlock(); openLoadMenu(true); }; $('ti-set').onclick=()=>openSettings(); $('ti-help').onclick=()=>openHelp();
   AUD.want='title'; if(AUD.unlocked) playMusic('title'); }
 function titleArt(){ const W=256,H=120; const cv=mkCanvas(W,H), x=cv.getContext('2d'); const g=x.createLinearGradient(0,0,0,H); g.addColorStop(0,'#0a0420'); g.addColorStop(0.7,'#5a2a6a'); g.addColorStop(1,'#e8783a'); x.fillStyle=g; x.fillRect(0,0,W,H);
@@ -2396,7 +2401,7 @@ async function worldFeature(f){ if(f.type==='town'){ enterTown(f.id); return; }
       const v=await ask('<p>Take the sky-skiff across the inland sea to the Citadel isle?</p>',[{label:'Sail',value:1,cls:'primary'},{label:'Stay',value:0}]); if(v){ VIEW.flash=0.9; G.pos={x:67,y:30}; wReveal(67,30,7); log('The skiff carries you to the isle.'); sfx('fanfare'); autosave(); } }
     else { const v=await ask('<p>Ride the skiff back to the Qadir shore?</p>',[{label:'Sail',value:1,cls:'primary'},{label:'Stay',value:0}]); if(v){ VIEW.flash=0.9; G.pos={x:83,y:30}; wReveal(83,30,7); log('Back on the Qadir shore.'); } } redraw(); return; }
   if(f.type==='shrine'){ const k='shrine_'+f.id; restParty(); sfx('heal'); let extra=''; if(!G.flags[k]){ G.flags[k]=1; for(const c of partyChars()) c.pts=(c.pts||0)+1; extra='<p class="good">A warm light fills you. Everyone in the party gains <b>+1 stat point</b> (spend it in 👥 Party).</p>'; }
-    refreshHUD(); autosave(); await say(`<h3>⛩ ${f.name}</h3><p>Your party is fully healed. Your game was saved.</p>${extra}`); return; }
+    refreshHUD(); autosave('shrine',{force:1}); await say(`<h3>⛩ ${f.name}</h3><p>Your party is fully healed. Your game was saved.</p>${extra}`); return; }
   if(f.type==='sign'||f.type==='pier'){ await say(`<p>${f.type==='sign'?'🪧 ':'⚓ '}${f.text}</p>`); return; } }
 // ---- dungeons: deepest floor and last position ----
 function enterDungeon(did,fi,atStairs){ enterDungeon_v01(did,fi,atStairs); G.deep=G.deep||{}; if(G.deep[did]==null||fi>G.deep[did]) G.deep[did]=fi; }
@@ -2827,5 +2832,50 @@ function owMapDraw(x,ox,oy,cs,seen){ const img=owMapImage(); const M=6; x.save()
   x.drawImage(fog,ox,oy,WW*cs,WH*cs); x.restore(); void M; }
 function owMapFeat(x,f,ox,oy,cs){ let im=null, w=0; if(f.type==='town'){ im=owImg('town_'+f.id); w=Math.max(16,cs*(TOWNS[f.id]&&TOWNS[f.id].village?2.4:3)); } else if(f.type==='dungeon'){ const D=DUNGEONS[f.id]||{}; im=owImg('dun_'+(OW_DUNSPR[f.id]||OW_DUNSPR[D.look]||'mine')); w=Math.max(13,cs*2.2); } else if(f.type==='shrine'){ im=owImg('shrine'); w=Math.max(10,cs*1.5); }
   if(!im) return false; const h=w*im.height/im.width; const cx=ox+(f.x+0.5)*cs, cy=oy+(f.y+0.5)*cs; x.save(); x.imageSmoothingEnabled=true; x.shadowColor='rgba(0,0,0,0.8)'; x.shadowBlur=3; x.drawImage(im,cx-w/2,cy+w*0.3-h,w,h); x.restore(); return true; }
+
+// ---- 19_autosave.js ----
+// =================== v0.2.2 robust autosave ===================
+// One dedicated autosave slot (sos_auto, plus the previous copy in sos_auto_prev in case a write is cut off).
+// Manual slots are never written here. Saves happen on area changes, battle wins, shop/inn/equip/level-up
+// changes, every ~40s of walking, and the moment the app is hidden or closed. During a battle the
+// state from just before the battle is saved instead, so a save can never land mid-fight.
+const AUTO_PREV=PREFIX+'auto_prev';
+const AS={last:0,full:'',core:'',pre:null,ind:0,timer:null};
+function asEnabled(){ return prefGet('autosave','on')!=='off'; }
+function asFull(s){ const c={...s}; delete c.ts; return JSON.stringify(c); }
+function asCore(s){ const c={...s}; for(const k of ['ts','pos','steps','wseen','encSteps','walkF','log','dun','_lastReg']) delete c[k]; if(c.dpos) c.dpos={did:c.dpos.did,fi:c.dpos.fi}; return JSON.stringify(c); }
+function readAuto(){ return readSave(AUTO_KEY)||readSave(AUTO_PREV); }
+function autosave(reason,opt){ opt=opt||{}; if(!G||G.mode==='title'||G.noSave||!G.chars) return false; if(!opt.force&&!asEnabled()) return false;
+  let s; if(B){ if(!AS.pre) return false; s=AS.pre; } else { try{ s=serialize(); }catch(e){ return false; } }
+  const txt=JSON.stringify(s);
+  try{ const prev=localStorage.getItem(AUTO_KEY); if(prev&&prev!==txt){ try{ localStorage.setItem(AUTO_PREV,prev); }catch(e){ try{ localStorage.removeItem(AUTO_PREV); }catch(_){} } } localStorage.setItem(AUTO_KEY,txt); }
+  catch(e){ try{ localStorage.removeItem(AUTO_PREV); localStorage.setItem(AUTO_KEY,txt); }catch(e2){ if(!opt.quiet) toast('Could not autosave: '+e2.message); return false; } }
+  AS.last=Date.now(); if(!B){ AS.full=asFull(s); AS.core=asCore(s); } window.__lastAutosave={reason:reason||'auto',ts:AS.last,n:((window.__lastAutosave||{}).n||0)+1};
+  if(!opt.quiet) savedIndicator(); return true; }
+function autosaveSoon(reason){ clearTimeout(AS.timer); AS.timer=setTimeout(()=>{ if(B) autosaveSoon(reason); else autosave(reason||'soon'); },700); }
+function savedIndicator(){ const now=Date.now(); if(now-AS.ind<25000) return; AS.ind=now; let el=$('saved-ind'); if(!el){ el=document.createElement('div'); el.id='saved-ind'; el.setAttribute('aria-live','polite'); document.body.appendChild(el); }
+  el.textContent='💾 Saved'; el.classList.add('show'); clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),1600); }
+// change watcher: important changes (gold, items, gear, levels, quests, area) save within ~4s; walking alone saves every ~40s
+setInterval(()=>{ if(!G||G.mode==='title'||B||document.hidden||!G.chars) return; let s; try{ s=serialize(); }catch(e){ return; }
+  if(asCore(s)!==AS.core) autosave('change'); else if(asFull(s)!==AS.full&&Date.now()-AS.last>=40000) autosave('walk'); },4000);
+// leaving the app: save right now (quietly)
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') autosave('hidden',{quiet:1}); });
+window.addEventListener('pagehide',()=>autosave('pagehide',{quiet:1}));
+window.addEventListener('beforeunload',()=>autosave('unload',{quiet:1}));
+// battles: remember the pre-battle state, save after a win
+{ const sb0=startBattle; startBattle=function(group,opts){ if(!B&&G&&G.chars){ try{ AS.pre=serialize(); }catch(e){ AS.pre=null; } } const p=sb0.apply(this,arguments);
+    Promise.resolve(p).then(r=>{ AS.pre=null; if(r==='win') autosaveSoon('battle'); },()=>{ AS.pre=null; }); return p; }; }
+// explicit hooks for shop, gear, party and level-ups (the watcher also catches anything missed)
+for(const fn of ['equip','unequip','recruit','buyDialog','levelPrompts','leaveTown','openPartySwap']){ if(typeof window[fn]!=='function') continue; const f0=window[fn];
+  window[fn]=function(){ const r=f0.apply(this,arguments); if(r&&typeof r.then==='function') r.then(()=>autosaveSoon(fn)); else autosaveSoon(fn); return r; }; }
+// loading a save sets the baseline so it isn't immediately re-saved
+{ const ls0=loadState; loadState=function(obj){ const r=ls0.apply(this,arguments); try{ const s=serialize(); AS.full=asFull(s); AS.core=asCore(s); AS.last=Date.now(); }catch(e){} return r; }; }
+// most recent of the autosave and the 3 manual slots
+function latestSave(){ const c=[]; const a=readAuto(); if(a) c.push({key:'auto',label:'Autosave',s:a}); for(const i of [1,2,3]){ const s=readSave(SLOT_KEY(i)); if(s) c.push({key:'slot'+i,label:'Slot '+i,s}); }
+  c.sort((x,y)=>(y.s.ts||0)-(x.s.ts||0)); return c[0]||null; }
+function agoText(ts){ const d=Math.max(0,Date.now()-(ts||0))/1000; if(d<60) return 'just now'; if(d<3600) return Math.round(d/60)+' min ago'; if(d<86400) return Math.round(d/3600)+' h ago'; return new Date(ts).toLocaleDateString(); }
+function saveWhere(s){ try{ if(s.mode==='dungeon'&&s.dpos&&DUNGEONS[s.dpos.did]) return DUNGEONS[s.dpos.did].name+(DUNGEONS[s.dpos.did].floors.length>1?' B'+(s.dpos.fi+1):''); if(s.mode==='town'&&TOWNS[s.town]) return TOWNS[s.town].name;
+  if(s.pos&&s.v>=3){ const R=REGIONS[wRegion(s.pos.x,s.pos.y)]; if(R) return R.name; } }catch(e){} return 'World map'; }
+function continueLine(L){ const s=L.s; const h=s.chars&&s.chars.hero; return `${L.label} · ${escapeHtml(h?h.name:'?')} Lv ${h?h.lv:'?'} · ${escapeHtml(saveWhere(s))} · ${fmt(s.gold||0)}g · saved ${agoText(s.ts)}`; }
 </script>
 </body></html>
