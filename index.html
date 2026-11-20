@@ -204,7 +204,7 @@ h2{ font-size:1.45em; } h3{ font-size:1.1em; }
 // ---- 00_core.js ----
 // Shards of Solmara — core helpers
 const GAME_TITLE='Shards of Solmara';
-const GAME_VERSION='0.2.3';
+const GAME_VERSION='0.2.4';
 const PREFIX='sos_';
 let G=null;      // the game state (saved)
 let B=null;      // the current battle (not saved)
@@ -1316,7 +1316,10 @@ function fxBurst_v01(u,el){ const col={fire:'#f84',ice:'#8cf',volt:'#ff4',holy:'
 function fxSlash_v01(u){ if(isFoe(u)) B.fx.push({kind:'slash',x:u.x,y:u.y-u.sz*0.5,t:0}); }
 
 // ---------- the round loop ----------
-async function battleLoop(){ bAnimLoop(); while(B&&!B.over){ B.round++; const cmds=await commandPhase(); if(!B) return; if(cmds==='fled') return endBattle('run'); await executeRound(cmds); if(await checkEnd()) return; endOfRound(); if(await checkEnd()) return; } }
+async function battleLoop(){ bAnimLoop(); let errs=0; while(B&&!B.over){ const b0=B;
+    try{ if(!liveParty().length){ if(await checkEnd()) return; } // nobody standing: go straight to the defeat screen instead of waiting forever
+      B.round++; const cmds=await commandPhase(); if(B!==b0) return; if(cmds==='fled') return endBattle('run'); await executeRound(cmds); if(B!==b0) return; if(await checkEnd()) return; endOfRound(); if(await checkEnd()) return; errs=0; }
+    catch(e){ console.error('battle round error',e); if(B!==b0) return; errs++; if(errs>=3){ toast('Something went wrong in this battle, so you slipped away safely.'); return endBattle('run'); } } } }
 function commandPhase(){ return new Promise(res=>{ B.cmds=[]; B.cmdResolve=res; B.ci=-1; nextChooser(1); }); }
 function choosers(){ return partyChars().filter(c=>canAct(c)); }
 function nextChooser(step){ const list=choosers(); if(!list.length){ const r=B.cmdResolve; B.cmdResolve=null; bShowCmd(null); r([]); return; }
@@ -1466,7 +1469,7 @@ async function enemyAct(f){ if(f.E.shift&&B.round%3===0&&!f._shifted){ f._shifte
   if(A.e==='buff'){ for(const o of foes) applyMods(o,A.buf,A.dur); bLog(`${f.name} uses ${A.name}. Monsters harden their guard.`); return; }
   bLog(`${f.name}: ${A.name==='Attack'?'attacks':A.name}`); if(A.e==='mag') sfx('emagic');
   const el=A.elFromShift?pick(['fire','ice','volt','holy','dark'].filter(e=>e!==f.shiftEl)):A.el;
-  const targets=A.t==='all'?liveParty():[pickPartyTarget()];
+  const targets=(A.t==='all'?liveParty():[pickPartyTarget()]).filter(Boolean);
   for(const t of targets){ if(!uAlive(t)) continue; if(A.e==='phys') await physHit(f,t,{p:A.p}); else if(A.e==='mag') await magHit(f,t,A.p,el); if(A.st&&uAlive(t)) tryStatus(t,A.st); if(A.e==='status') tryStatus(t,A.st); }
   if(f.E.shift&&B.round%3===0&&chance(0.5)){ f.shiftEl=pick(['fire','ice','volt','holy','dark'].filter(e=>e!==f.shiftEl)); bLog(`🔷 ${f.name} shimmers — now ${ELEMS[f.shiftEl]}.`); } }
 function endOfRound(){ const all=[...liveParty(),...liveFoes()]; for(const u of all){ const st=uSt(u); delete st.defend;
@@ -1491,8 +1494,11 @@ async function victory(){ const foes=B.foes; let xp=0,gold=0; const drops=[]; fo
 async function defeat(){ const opts=B.opts; const r=B.res; if(opts.arena){ cleanupBattle(); for(const c of partyChars()) if(c.hp<=0) c.hp=1; await say('<h2>Defeated</h2><p>You are carried out of the arena pit. No harm done — try again when you are stronger.</p>'); r('lose'); return; }
   sfx('gameover'); playMusic('gameover');
   const v=await ask(`<h2>Your party has fallen…</h2><p>You can wake up at the last inn you visited (${TOWNS[G.lastInn].name}). You keep your items and experience but lose half your gold.</p>`,[{label:'Wake up at the inn',value:'inn',cls:'primary'},{label:'Load a save',value:'load'}]);
-  cleanupBattle(); if(v==='load'){ openLoadMenu(true); r('lose'); return; }
-  G.gold=Math.floor(G.gold/2); restParty(true); G.mode='world'; G.dpos=null; const T=TOWNS[G.lastInn]; G.pos={x:T.x,y:T.y+1}; r('lose'); enterTown(G.lastInn); log('You wake at the inn, bruised but alive.'); }
+  cleanupBattle();
+  // "Load a save": never leave (or autosave) a fallen party. Saving is paused until a save is loaded; backing out of the menu wakes you at the inn.
+  if(v==='load'){ const g=G; g._downed=1; g.noSave=true; r('lose'); openLoadMenu(true,()=>{ if(G===g&&g._downed){ delete g._downed; g.noSave=false; wakeAtInn(); } }); return; }
+  r('lose'); wakeAtInn(); }
+function wakeAtInn(){ G.gold=Math.floor(G.gold/2); restParty(true); G.mode='world'; G.dpos=null; const T=TOWNS[G.lastInn]; G.pos={x:T.x,y:T.y+1}; enterTown(G.lastInn); log('You wake at the inn, bruised but alive.'); }
 function endBattle(how){ const r=B.res; cleanupBattle(); r(how); }
 function cleanupBattle(){ for(const c of rosterChars()){ delete c._st; delete c._mods; } B=null; $('battle').classList.add('hidden'); document.body.classList.remove('inbattle'); playMusic(G.mode==='dungeon'?'dungeon':G.mode==='town'?'town':'world'); refreshHUD(); redraw(); }
 function bRenderParty(){ const el=$('b-party'); if(!el||!B) return; el.innerHTML=partyChars().map(c=>{ const st=c._st||{}; const icons=Object.keys(st).filter(k=>st[k]>0&&STATUS_INFO[k]).map(k=>`<span title="${STATUS_INFO[k][1]}">${STATUS_INFO[k][0]}</span>`).join('');
@@ -1880,7 +1886,10 @@ function validate(s){ for(const k of TRANSIENT_KEYS) delete s[k]; if(!['world','
   for(const k in s.inv) if(!ITEMS[k]) delete s.inv[k];
   if(s.mode==='dungeon'&&(!s.dpos||!DUNGEONS[s.dpos.did]||!DUNGEONS[s.dpos.did].floors[s.dpos.fi])){ s.mode='world'; s.dpos=null; }
   if(s.mode==='town'&&!TOWNS[s.town]) s.mode='world';
-  if(s.mode==='dungeon'){ try{ const G0=G; G=s; const fl=buildFloor(s.dpos.did,s.dpos.fi); const c=dCell(fl,s.dpos.x,s.dpos.y); const bad=c==='#'||dSolid(c)||!Number.isInteger(s.dpos.x)||!Number.isInteger(s.dpos.y); if(bad){ s.dpos.x=fl.start.x; s.dpos.y=fl.start.y; s.dpos.f=firstOpenDir(fl,fl.start.x,fl.start.y); } if(![0,1,2,3].includes(s.dpos.f)) s.dpos.f=firstOpenDir(fl,s.dpos.x,s.dpos.y); G=G0; }catch(e){ s.mode='world'; s.dpos=null; } }
+  if(s.mode==='dungeon'){ const G0=G; try{ G=s; const fl=buildFloor(s.dpos.did,s.dpos.fi); const c=dCell(fl,s.dpos.x,s.dpos.y); const bad=c==='#'||dSolid(c)||!Number.isInteger(s.dpos.x)||!Number.isInteger(s.dpos.y); if(bad){ s.dpos.x=fl.start.x; s.dpos.y=fl.start.y; s.dpos.f=firstOpenDir(fl,fl.start.x,fl.start.y); } if(![0,1,2,3].includes(s.dpos.f)) s.dpos.f=firstOpenDir(fl,s.dpos.x,s.dpos.y); }catch(e){ s.mode='world'; s.dpos=null; } finally{ G=G0; } }
+  // a save of a fallen party (written by v0.2.2/v0.2.3 while the "Load a save" menu was open after a defeat) would start every battle with nobody able to act: stand the party back up
+  { const ps=s.party.map(id=>s.chars[id]).filter(Boolean); for(const c of ps){ if(typeof c.hp!=='number'||!isFinite(c.hp)) c.hp=0; if(typeof c.mp!=='number'||!isFinite(c.mp)) c.mp=0; }
+    if(ps.length&&ps.every(c=>c.hp<=0)){ const G0=G; try{ G=s; for(const c of ps) c.hp=Math.max(1,Math.ceil(maxHP(c)*0.5)); }catch(e){ for(const c of ps) c.hp=Math.max(1,c.hp); } finally{ G=G0; } s._revived=1; } }
   if(s.mode!=='dungeon') s.dpos=null; if(s.pos&&(!Number.isInteger(s.pos.x)||!Number.isInteger(s.pos.y)||s.pos.x<0||s.pos.y<0||s.pos.x>=WW||s.pos.y>=WH)) s.pos=null;
   if(!s.pos||!wPassable.call(null,s.pos.x,s.pos.y)){ const T=TOWNS[s.lastInn]||TOWNS.corlan; s.pos={x:T.x,y:T.y+1}; }
   if(!TOWNS[s.lastInn]) s.lastInn='corlan'; s.cont=s.cont||'main'; s.deep=s.deep||{};
@@ -1890,14 +1899,15 @@ function loadState(obj){ let s=migrate(JSON.parse(JSON.stringify(obj))); const p
   G.busy=false; if(B){ try{ cleanupBattle(); }catch(e){} B=null; } $('battle').classList.add('hidden'); CAM.a=null; VIEW.flash=0; VIEW.dirty=true; if(typeof AS!=='undefined'){ AS.pre=null; clearTimeout(AS.timer); } { const t=$('tipcard'); if(t) t.classList.add('hidden'); }
   closeAllPanels(); closeAllModals(); $('title').classList.add('hidden'); $('town').classList.add('hidden'); for(const c of rosterChars()) clampHPMP(c);
   if(G.mode==='town') enterTown(G.town); else if(G.mode==='dungeon'){ playMusic('dungeon'); } else { G.mode='world'; playMusic('world'); }
-  refreshHUD(); questUpdate(); redraw(); }
+  refreshHUD(); questUpdate(); redraw();
+  if(G._revived){ delete G._revived; setTimeout(()=>toast('Your party had fallen in this save, so they are back on their feet at half health.',4200),900); } }
 function openSaveMenu(){ if(B){ toast('Finish the battle first.'); return; } const body=()=>[1,2,3].map(i=>{ const s=readSave(SLOT_KEY(i)); return `<button class="btn lrow" data-s="${i}"><b>Slot ${i}</b><br><span class="dim">${s?summary(s):'Empty'}</span></button>`; }).join('')+`<p class="dim">Autosave (separate, never touches these slots): ${summary(readSave(AUTO_KEY))||'none yet'}</p>`;
   const p=panel('💾 Save game',body()); const bind=()=>p.querySelectorAll('[data-s]').forEach(b=>b.onclick=async()=>{ const i=b.dataset.s; if(readSave(SLOT_KEY(i))){ const v=await ask(`<p>Overwrite slot ${i}?</p>`,[{label:'Overwrite',value:1,cls:'primary'},{label:'Cancel',value:0}]); if(!v) return; }
     if(writeSave(SLOT_KEY(i))){ sfx('ok'); toast(`Saved to slot ${i}.`); autosave(); } p.refresh(null,body()); bind(); }); bind(); }
-function openLoadMenu(fromDefeat){ const rows=[['auto','Autosave',(typeof readAuto==='function'?readAuto():readSave(AUTO_KEY))],...[1,2,3].map(i=>['slot'+i,'Slot '+i,readSave(SLOT_KEY(i))])];
+function openLoadMenu(fromDefeat,onCancel){ const rows=[['auto','Autosave',(typeof readAuto==='function'?readAuto():readSave(AUTO_KEY))],...[1,2,3].map(i=>['slot'+i,'Slot '+i,readSave(SLOT_KEY(i))])];
   const p=panel('📂 Load game',`${rows.map(([k,l,s])=>`<button class="btn lrow" data-l="${k}" ${s?'':'disabled'}><b>${l}</b><br><span class="dim">${s?summary(s):'Empty'}</span></button>`).join('')}
    <h3>Backup file</h3><p class="dim">Export saves all slots into one file (keep it in Files or iCloud). Import asks before replacing anything.</p>
-   <div class="row"><button class="btn" id="ld-exp">⬆ Export saves</button><button class="btn" id="ld-imp">⬇ Import saves</button></div>`,{onBack:fromDefeat&&!G?showTitle:null});
+   <div class="row"><button class="btn" id="ld-exp">⬆ Export saves</button><button class="btn" id="ld-imp">⬇ Import saves</button></div>`,{onBack:fromDefeat&&!G?showTitle:(onCancel||null)});
   p.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>{ const k=b.dataset.l; const s=k==='auto'?(typeof readAuto==='function'?readAuto():readSave(AUTO_KEY)):readSave(SLOT_KEY(k.slice(4))); if(!s) return; try{ loadState(s); toast('Game loaded.'); }catch(e){ toast('That save could not be loaded: '+e.message); } });
   p.querySelector('#ld-exp').onclick=exportSaves; p.querySelector('#ld-imp').onclick=pickImport; }
 function exportSaves(){ const bundle={format:'solmara-saves',version:SAVE_VERSION,game:GAME_VERSION,ts:Date.now(),auto:readSave(AUTO_KEY),autoPrev:readSave(PREFIX+'auto_prev'),slots:[1,2,3].map(i=>readSave(SLOT_KEY(i)))};
@@ -2854,7 +2864,7 @@ function asFull(s){ const c={...s}; delete c.ts; return JSON.stringify(c); }
 function asCore(s){ const c={...s}; for(const k of ['ts','pos','steps','wseen','encSteps','walkF','log','dun','_lastReg']) delete c[k]; if(c.dpos) c.dpos={did:c.dpos.did,fi:c.dpos.fi}; return JSON.stringify(c); }
 function readAuto(){ return readSave(AUTO_KEY)||readSave(AUTO_PREV); }
 function autosave(reason,opt){ opt=opt||{}; if(!G||G.mode==='title'||G.noSave||!G.chars) return false; if(!opt.force&&!asEnabled()) return false;
-  let s; if(B){ if(!AS.pre) return false; s=AS.pre; } else { try{ s=serialize(); }catch(e){ return false; } }
+  let s; if(B){ if(!AS.pre) return false; s=AS.pre; } else { if(!G.party.some(id=>G.chars[id]&&G.chars[id].hp>0)) return false; try{ s=serialize(); }catch(e){ return false; } } // never save a fallen party
   const txt=JSON.stringify(s);
   try{ const prev=localStorage.getItem(AUTO_KEY); if(prev&&prev!==txt){ try{ localStorage.setItem(AUTO_PREV,prev); }catch(e){ try{ localStorage.removeItem(AUTO_PREV); }catch(_){} } } localStorage.setItem(AUTO_KEY,txt); }
   catch(e){ try{ localStorage.removeItem(AUTO_PREV); localStorage.setItem(AUTO_KEY,txt); }catch(e2){ if(!opt.quiet) toast('Could not autosave: '+e2.message); return false; } }
