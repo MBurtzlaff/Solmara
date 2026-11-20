@@ -204,7 +204,7 @@ h2{ font-size:1.45em; } h3{ font-size:1.1em; }
 // ---- 00_core.js ----
 // Shards of Solmara — core helpers
 const GAME_TITLE='Shards of Solmara';
-const GAME_VERSION='0.2.4';
+const GAME_VERSION='0.2.5';
 const PREFIX='sos_';
 let G=null;      // the game state (saved)
 let B=null;      // the current battle (not saved)
@@ -1310,7 +1310,7 @@ function bDraw_v01(){ if(!B) return; const cv=$('bcv'); const x=cv.getContext('2
     else if(fx.kind==='burst'){ x.globalAlpha=Math.max(0,1-fx.t/14); x.fillStyle=fx.col; x.beginPath(); x.arc(fx.x,fx.y,4+fx.t*2.2,0,Math.PI*2); x.fill(); x.globalAlpha=1; }
     else if(fx.kind==='slash'){ x.globalAlpha=Math.max(0,1-fx.t/8); x.strokeStyle='#fff'; x.lineWidth=2; x.beginPath(); x.moveTo(fx.x-12+fx.t,fx.y-14); x.lineTo(fx.x+12-fx.t,fx.y+8); x.stroke(); x.globalAlpha=1; } }
   B.fx=B.fx.filter(f=>f.t<(f.kind==='num'?26:16)); }
-function bAnimLoop(){ if(!B) return; bDraw(); requestAnimationFrame(bAnimLoop); }
+function bAnimLoop(){ if(!B) return; try{ bDraw(); }catch(e){} requestAnimationFrame(bAnimLoop); }
 function fxNum_v01(u,txt,col){ if(isFoe(u)) B.fx.push({kind:'num',x:u.x,y:u.y-u.sz*0.5,txt:String(txt),col:col||'#fff',t:0}); else { const card=document.querySelector(`.bcard[data-id="${u.id}"]`); if(card){ const n=document.createElement('div'); n.className='pnum'; n.style.color=col||'#fff'; n.textContent=txt; card.appendChild(n); setTimeout(()=>n.remove(),1000); card.classList.remove('hurt'); void card.offsetWidth; if(col==='#f66'||col==='#fff'||col==='#ffd040') card.classList.add('hurt'); } } }
 function fxBurst_v01(u,el){ const col={fire:'#f84',ice:'#8cf',volt:'#ff4',holy:'#fff8c0',dark:'#a4f'}[el]||'#ddf'; if(isFoe(u)) B.fx.push({kind:'burst',x:u.x,y:u.y-u.sz*0.5,col,t:0}); }
 function fxSlash_v01(u){ if(isFoe(u)) B.fx.push({kind:'slash',x:u.x,y:u.y-u.sz*0.5,t:0}); }
@@ -1319,7 +1319,8 @@ function fxSlash_v01(u){ if(isFoe(u)) B.fx.push({kind:'slash',x:u.x,y:u.y-u.sz*0
 async function battleLoop(){ bAnimLoop(); let errs=0; while(B&&!B.over){ const b0=B;
     try{ if(!liveParty().length){ if(await checkEnd()) return; } // nobody standing: go straight to the defeat screen instead of waiting forever
       B.round++; const cmds=await commandPhase(); if(B!==b0) return; if(cmds==='fled') return endBattle('run'); await executeRound(cmds); if(B!==b0) return; if(await checkEnd()) return; endOfRound(); if(await checkEnd()) return; errs=0; }
-    catch(e){ console.error('battle round error',e); if(B!==b0) return; errs++; if(errs>=3){ toast('Something went wrong in this battle, so you slipped away safely.'); return endBattle('run'); } } } }
+    catch(e){ if(typeof errLog==='function') errLog('round',e); else console.error('battle round error',e); if(B!==b0) return; errs++; await wait(300);
+      if(errs>=3){ const v=await ask(`<p>Something went wrong in this battle.</p><p class="dim tiny">${escapeHtml(String((e&&e.message)||e)).slice(0,160)}</p><p class="dim">A screenshot of this helps fix it.</p>`,[{label:'Keep fighting',value:'retry',cls:'primary'},{label:'Escape',value:'run'}]); if(B!==b0) return; if(v==='run') return endBattle('run'); errs=0; } } } }
 function commandPhase(){ return new Promise(res=>{ B.cmds=[]; B.cmdResolve=res; B.ci=-1; nextChooser(1); }); }
 function choosers(){ return partyChars().filter(c=>canAct(c)); }
 function nextChooser(step){ const list=choosers(); if(!list.length){ const r=B.cmdResolve; B.cmdResolve=null; bShowCmd(null); r([]); return; }
@@ -1832,11 +1833,12 @@ function openSettings(){ const sel=(k,d,opts)=>{ const v=prefGet(k,d); return `<
    ${sel('minimap','on',{label:'Dungeon minimap',v:[['on','On'],['off','Off']]})}
    <div class="setrow"><span>Map zoom</span><div class="seg"><button class="btn small" data-z="-">－</button><b>${Math.round(VIEW.zoom*100)}%</b><button class="btn small" data-z="+">＋</button></div></div>
    <div class="row"><button class="btn big primary" id="set-reset">↺ Reset to phone defaults</button></div>
+   <div class="row"><button class="btn" id="set-errlog">🩺 Problem log</button></div>
    <p class="dim">Reset puts every setting back to how it shipped. Your saves are never touched. Pinch-zoom works on every screen.</p>
    <p class="dim">Silent switch: on iPhone the game follows the ring/silent switch.</p>`;
   const p=panel('⚙ Settings',body()); const bind=()=>{ p.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{ prefSet(b.dataset.k,b.dataset.v); applyPrefs(); sfx('select'); if(b.dataset.k==='tips'&&b.dataset.v==='on') prefSet('tips_seen',''); p.refresh(null,body()); bind(); });
     p.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>{ setZoom(VIEW.zoom*(b.dataset.z==='+'?1.25:0.8)); p.refresh(null,body()); bind(); });
-    p.querySelector('#set-reset').onclick=()=>{ resetPhoneDefaults(); p.refresh(null,body()); bind(); }; }; bind(); }
+    p.querySelector('#set-reset').onclick=()=>{ resetPhoneDefaults(); p.refresh(null,body()); bind(); }; p.querySelector('#set-errlog').onclick=()=>openErrLog(); }; bind(); }
 function resetPhoneDefaults(){ for(const k of PREF_KEYS) prefDel(k); VIEW.zoom=1; applyPrefs(); redraw(); toast('Phone defaults restored. Your saves are untouched.'); }
 function applyPrefs(){ const t=prefGet('text','large'); const map={normal:15,large:16.5,xlarge:18.5}; document.documentElement.style.fontSize=(map[t]||16.5)+'px'; audApplyPrefs(); }
 function setZoom(z){ VIEW.zoom=clamp(z,0.6,2.5); prefSet('wzoom',VIEW.zoom.toFixed(2)); redraw(); }
@@ -1855,7 +1857,7 @@ const SAVE_VERSION=3;
 const SLOT_KEY=i=>PREFIX+'slot'+i, AUTO_KEY=PREFIX+'auto';
 function serialize(){ const keep=JSON.parse(JSON.stringify(G,(k,v)=>k.startsWith('_')?undefined:v)); keep.v=SAVE_VERSION; keep.game=GAME_VERSION; keep.ts=Date.now(); for(const k of TRANSIENT_KEYS) delete keep[k]; if(!['world','town','dungeon'].includes(keep.mode)) keep.mode='world'; return keep; }
 // runtime-only flags (input locks etc.) must never be saved or restored: a save taken mid-step once kept busy=true and froze the party
-const TRANSIENT_KEYS=['busy','moving','locked','inBattle','transition','menuOpen','pending'];
+const TRANSIENT_KEYS=['busy','moving','locked','inBattle','transition','menuOpen','pending','noSave'];
 function summary(s){ if(!s) return null; const h=s.chars&&s.chars.hero; const where=s.mode==='dungeon'&&s.dpos?DUNGEONS[s.dpos.did].name:s.mode==='town'&&s.town?TOWNS[s.town].name:'World map';
   return `${escapeHtml(h?h.name:'?')} Lv ${h?h.lv:'?'} · ${where} · ${fmt(s.gold||0)}g · ${new Date(s.ts||0).toLocaleString()}`; }
 function readSave(key){ try{ const s=localStorage.getItem(key); return s?JSON.parse(s):null; }catch(e){ return null; } }
@@ -1880,7 +1882,7 @@ const MIGRATIONS={
 };
 function migrate(s){ let v=s.v||0; let n=0; while(v<SAVE_VERSION&&MIGRATIONS[v]&&n<20){ s=MIGRATIONS[v](s); v=s.v; n++; } return s; }
 function validate(s){ for(const k of TRANSIENT_KEYS) delete s[k]; if(!['world','town','dungeon'].includes(s.mode)) s.mode='world'; if(!s.chars||!s.chars.hero) throw new Error('save has no hero');
-  if(!s.flags) s.flags={}; if(!s.inv) s.inv={}; if(!s.dun) s.dun={}; if(s.gold==null||!isFinite(s.gold)) s.gold=0; if(s.encSteps==null||!isFinite(s.encSteps)||s.encSteps<4) s.encSteps=12; if(!s.log) s.log=[]; if(s.steps==null) s.steps=0; if(s.walkF==null) s.walkF=0;
+  if(!s.flags) s.flags={}; if(!s.inv) s.inv={}; if(!s.dun) s.dun={}; if(s.gold==null||!isFinite(s.gold)) s.gold=0; if(typeof s.encSteps!=='number'||!isFinite(s.encSteps)||s.encSteps<4||s.encSteps>60) s.encSteps=12; if(!s.log) s.log=[]; if(s.steps==null) s.steps=0; if(s.walkF==null) s.walkF=0;
   if(!s.roster) s.roster=Object.keys(s.chars); s.party=(s.party||[]).filter(id=>s.chars[id]); if(!s.party.length) s.party=[s.roster[0]]; s.party=s.party.slice(0,MAX_PARTY);
   for(const id in s.chars){ const c=s.chars[id]; for(const sl in c.eq) if(c.eq[sl]&&!ITEMS[c.eq[sl]]) c.eq[sl]=null; if(c.path&&!CLASSES[c.cls].paths[c.path]) c.path=null; if(c.disc&&!DISCIPLINES[c.disc]) c.disc=null; }
   for(const k in s.inv) if(!ITEMS[k]) delete s.inv[k];
@@ -2898,5 +2900,39 @@ function continueLine(L){ const s=L.s; const h=s.chars&&s.chars.hero; return `${
 
 // watchdog: an input lock with no dialog, menu, battle or animation behind it is stuck — release it
 { let since=0; setInterval(()=>{ if(!G||!G.busy||B||MODALS.length||PANELS.length||(CAM.a&&performance.now()-CAM.a.t0<CAM.a.dur+200)){ since=0; return; } if(!since){ since=Date.now(); return; } if(Date.now()-since>2500){ G.busy=false; since=0; window.__unstuck=(window.__unstuck||0)+1; redraw(); } },500); }
+
+// ---- 20_safety.js ----
+// =================== v0.2.5 battle safety net + error log ===================
+// Any error is written to a small on-device log (⚙ Settings → Problem log) so a phone-only bug can be read off a screenshot.
+const ERRLOG_KEY=PREFIX+'errlog';
+function errLog(where,e){ try{ const L=JSON.parse(localStorage.getItem(ERRLOG_KEY)||'[]'); const msg=(e&&(e.message||String(e)))||'?'; const st=((e&&e.stack)||'').split('\n').slice(0,3).join(' | ').slice(0,300);
+  L.unshift({t:Date.now(),v:GAME_VERSION,where,msg:String(msg).slice(0,200),st,mode:G&&G.mode}); localStorage.setItem(ERRLOG_KEY,JSON.stringify(L.slice(0,20))); }catch(_){} try{ console.warn('['+where+']',e); }catch(_){} }
+window.addEventListener('error',e=>errLog('error',e.error||e.message));
+window.addEventListener('unhandledrejection',e=>errLog('promise',e.reason));
+// keep inventory / gear / party clean at runtime too (not just on load), so one bad entry can never break every battle
+function sanitizeLive(){ if(!G||!G.chars) return; try{ for(const k of Object.keys(G.inv||{})) if(!ITEMS[k]||!(G.inv[k]>0)) delete G.inv[k];
+  G.party=(G.party||[]).filter(id=>G.chars[id]); if(!G.party.length&&G.chars.hero) G.party=['hero'];
+  for(const id in G.chars){ const c=G.chars[id]; if(!c.eq) c.eq={}; for(const sl in c.eq) if(c.eq[sl]&&!ITEMS[c.eq[sl]]) c.eq[sl]=null; if(c.path&&!(CLASSES[c.cls]&&CLASSES[c.cls].paths&&CLASSES[c.cls].paths[c.path])) c.path=null; if(c.disc&&!DISCIPLINES[c.disc]) c.disc=null;
+    if(typeof c.hp!=='number'||!isFinite(c.hp)) c.hp=1; if(typeof c.mp!=='number'||!isFinite(c.mp)) c.mp=0; }
+  if(typeof G.encSteps!=='number'||!isFinite(G.encSteps)||G.encSteps>60) G.encSteps=16; }catch(e){ errLog('sanitize',e); } }
+// battle start: clean state first; if the start itself fails, say so instead of silently doing nothing
+{ const sb1=startBattle; startBattle=function(group,opts){ sanitizeLive(); try{ return sb1.apply(this,arguments); }catch(e){ errLog('startBattle',e); toast('A battle could not start: '+((e&&e.message)||e)); return Promise.resolve('run'); } }; }
+// command menu: if building the full menu fails, show a simple one that always works (Attack / Defend / Run / Auto)
+{ const sc0=bShowCmd; bShowCmd=function(c){ try{ return sc0.apply(this,arguments); }catch(e){ errLog('commands',e); bShowCmdSimple(c); } }; }
+function bShowCmdSimple(c){ const el=$('b-cmd'); if(!B) return; B.cur=c; B.targeting=null; if(!c){ el.innerHTML='<div class="bwait">…</div>'; return; }
+  const noRun=B.opts.noRun||B.foes.some(f=>f.boss);
+  el.innerHTML=`<div class="bwho"><b>${escapeHtml(c.name||'?')}</b></div><div class="bgrid"><button class="btn big" data-c="attack">⚔ Attack</button><button class="btn big" data-c="defend">🛡 Defend</button><button class="btn big" data-c="run" ${noRun?'disabled':''}>🏃 Run</button><button class="btn" data-c="auto">⚡ Auto</button></div>`;
+  const foe=()=>liveFoes().slice().sort((p,q)=>p.hp-q.hp)[0];
+  el.querySelector('[data-c=attack]').onclick=()=>pushCmd({actor:c,type:'attack',target:foe()});
+  el.querySelector('[data-c=defend]').onclick=()=>pushCmd({actor:c,type:'defend'});
+  el.querySelector('[data-c=run]').onclick=()=>tryRun();
+  el.querySelector('[data-c=auto]').onclick=()=>{ const list=choosers(); for(let i=B.ci;i<list.length;i++) B.cmds[i]={actor:list[i],type:'attack',target:foe()}; B.ci=list.length-1; nextChooser(1); }; }
+// drawing errors must never stop the battle
+{ const bd0=bDraw; let n=0; bDraw=function(){ try{ return bd0.apply(this,arguments); }catch(e){ if(n++<3) errLog('draw',e); } }; }
+// Settings → Problem log
+function openErrLog(){ let L=[]; try{ L=JSON.parse(localStorage.getItem(ERRLOG_KEY)||'[]'); }catch(_){}
+  const p=panel('🩺 Problem log',`${L.length?L.map(x=>`<div class="lrow" style="padding:6px 0;border-bottom:1px solid #334"><b>${new Date(x.t).toLocaleString()}</b> · v${escapeHtml(x.v||'')} · ${escapeHtml(x.where||'')} · ${escapeHtml(x.mode||'')}<br>${escapeHtml(x.msg||'')}<br><span class="dim tiny">${escapeHtml(x.st||'')}</span></div>`).join(''):'<p>No problems recorded. 👍</p>'}
+   <p class="dim">If something goes wrong, a screenshot of this page helps fix it fast.</p><div class="row"><button class="btn" id="el-clear">Clear log</button></div>`);
+  p.querySelector('#el-clear').onclick=()=>{ try{ localStorage.removeItem(ERRLOG_KEY); }catch(_){} closePanel(p); openErrLog(); }; }
 </script>
 </body></html>
