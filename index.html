@@ -204,7 +204,7 @@ h2{ font-size:1.45em; } h3{ font-size:1.1em; }
 // ---- 00_core.js ----
 // Shards of Solmara — core helpers
 const GAME_TITLE='Shards of Solmara';
-const GAME_VERSION='0.2.2';
+const GAME_VERSION='0.2.3';
 const PREFIX='sos_';
 let G=null;      // the game state (saved)
 let B=null;      // the current battle (not saved)
@@ -1847,7 +1847,9 @@ function openHelp(){ panel('❓ How to play',`<h3>Goal</h3><p>Recover the four S
 // ---------------- saves: autosave, 3 slots, export/import, migration ----------------
 const SAVE_VERSION=3;
 const SLOT_KEY=i=>PREFIX+'slot'+i, AUTO_KEY=PREFIX+'auto';
-function serialize(){ const keep=JSON.parse(JSON.stringify(G,(k,v)=>k.startsWith('_')?undefined:v)); keep.v=SAVE_VERSION; keep.game=GAME_VERSION; keep.ts=Date.now(); if(keep.mode==='battle') keep.mode='world'; return keep; }
+function serialize(){ const keep=JSON.parse(JSON.stringify(G,(k,v)=>k.startsWith('_')?undefined:v)); keep.v=SAVE_VERSION; keep.game=GAME_VERSION; keep.ts=Date.now(); for(const k of TRANSIENT_KEYS) delete keep[k]; if(!['world','town','dungeon'].includes(keep.mode)) keep.mode='world'; return keep; }
+// runtime-only flags (input locks etc.) must never be saved or restored: a save taken mid-step once kept busy=true and froze the party
+const TRANSIENT_KEYS=['busy','moving','locked','inBattle','transition','menuOpen','pending'];
 function summary(s){ if(!s) return null; const h=s.chars&&s.chars.hero; const where=s.mode==='dungeon'&&s.dpos?DUNGEONS[s.dpos.did].name:s.mode==='town'&&s.town?TOWNS[s.town].name:'World map';
   return `${escapeHtml(h?h.name:'?')} Lv ${h?h.lv:'?'} · ${where} · ${fmt(s.gold||0)}g · ${new Date(s.ts||0).toLocaleString()}`; }
 function readSave(key){ try{ const s=localStorage.getItem(key); return s?JSON.parse(s):null; }catch(e){ return null; } }
@@ -1871,15 +1873,21 @@ const MIGRATIONS={
    s.wseen=''; s._revealFrom=1; s.v=3; return s; },
 };
 function migrate(s){ let v=s.v||0; let n=0; while(v<SAVE_VERSION&&MIGRATIONS[v]&&n<20){ s=MIGRATIONS[v](s); v=s.v; n++; } return s; }
-function validate(s){ if(!s.roster) s.roster=Object.keys(s.chars); s.party=(s.party||[]).filter(id=>s.chars[id]); if(!s.party.length) s.party=[s.roster[0]]; s.party=s.party.slice(0,MAX_PARTY);
+function validate(s){ for(const k of TRANSIENT_KEYS) delete s[k]; if(!['world','town','dungeon'].includes(s.mode)) s.mode='world'; if(!s.chars||!s.chars.hero) throw new Error('save has no hero');
+  if(!s.flags) s.flags={}; if(!s.inv) s.inv={}; if(!s.dun) s.dun={}; if(s.gold==null||!isFinite(s.gold)) s.gold=0; if(s.encSteps==null||!isFinite(s.encSteps)||s.encSteps<4) s.encSteps=12; if(!s.log) s.log=[]; if(s.steps==null) s.steps=0; if(s.walkF==null) s.walkF=0;
+  if(!s.roster) s.roster=Object.keys(s.chars); s.party=(s.party||[]).filter(id=>s.chars[id]); if(!s.party.length) s.party=[s.roster[0]]; s.party=s.party.slice(0,MAX_PARTY);
   for(const id in s.chars){ const c=s.chars[id]; for(const sl in c.eq) if(c.eq[sl]&&!ITEMS[c.eq[sl]]) c.eq[sl]=null; if(c.path&&!CLASSES[c.cls].paths[c.path]) c.path=null; if(c.disc&&!DISCIPLINES[c.disc]) c.disc=null; }
   for(const k in s.inv) if(!ITEMS[k]) delete s.inv[k];
   if(s.mode==='dungeon'&&(!s.dpos||!DUNGEONS[s.dpos.did]||!DUNGEONS[s.dpos.did].floors[s.dpos.fi])){ s.mode='world'; s.dpos=null; }
   if(s.mode==='town'&&!TOWNS[s.town]) s.mode='world';
+  if(s.mode==='dungeon'){ try{ const G0=G; G=s; const fl=buildFloor(s.dpos.did,s.dpos.fi); const c=dCell(fl,s.dpos.x,s.dpos.y); const bad=c==='#'||dSolid(c)||!Number.isInteger(s.dpos.x)||!Number.isInteger(s.dpos.y); if(bad){ s.dpos.x=fl.start.x; s.dpos.y=fl.start.y; s.dpos.f=firstOpenDir(fl,fl.start.x,fl.start.y); } if(![0,1,2,3].includes(s.dpos.f)) s.dpos.f=firstOpenDir(fl,s.dpos.x,s.dpos.y); G=G0; }catch(e){ s.mode='world'; s.dpos=null; } }
+  if(s.mode!=='dungeon') s.dpos=null; if(s.pos&&(!Number.isInteger(s.pos.x)||!Number.isInteger(s.pos.y)||s.pos.x<0||s.pos.y<0||s.pos.x>=WW||s.pos.y>=WH)) s.pos=null;
   if(!s.pos||!wPassable.call(null,s.pos.x,s.pos.y)){ const T=TOWNS[s.lastInn]||TOWNS.corlan; s.pos={x:T.x,y:T.y+1}; }
   if(!TOWNS[s.lastInn]) s.lastInn='corlan'; s.cont=s.cont||'main'; s.deep=s.deep||{};
   if(s._revealFrom||!s.wseen){ delete s._revealFrom; const a=new Uint8Array(WW*WH); if(s.wseen) wsUnpack(s.wseen,a); s._ws=a; const G0=G; G=s; for(const id in TOWNS) if(s.flags['visited_'+id]) wReveal(TOWNS[id].x,TOWNS[id].y,9); for(const did in s.deep) if(DUNGEONS[did]) wReveal(DUNGEONS[did].x,DUNGEONS[did].y,6); if(s.pos) wReveal(s.pos.x,s.pos.y,8); s.wseen=wsPack(a); G=G0; } return s; }
 function loadState(obj){ let s=migrate(JSON.parse(JSON.stringify(obj))); const prev=G; G=s; try{ validate(G); }catch(e){ G=prev; throw e; }
+  // clear every runtime lock so the party can always move after a load
+  G.busy=false; if(B){ try{ cleanupBattle(); }catch(e){} B=null; } $('battle').classList.add('hidden'); CAM.a=null; VIEW.flash=0; VIEW.dirty=true; if(typeof AS!=='undefined'){ AS.pre=null; clearTimeout(AS.timer); } { const t=$('tipcard'); if(t) t.classList.add('hidden'); }
   closeAllPanels(); closeAllModals(); $('title').classList.add('hidden'); $('town').classList.add('hidden'); for(const c of rosterChars()) clampHPMP(c);
   if(G.mode==='town') enterTown(G.town); else if(G.mode==='dungeon'){ playMusic('dungeon'); } else { G.mode='world'; playMusic('world'); }
   refreshHUD(); questUpdate(); redraw(); }
@@ -2877,5 +2885,8 @@ function agoText(ts){ const d=Math.max(0,Date.now()-(ts||0))/1000; if(d<60) retu
 function saveWhere(s){ try{ if(s.mode==='dungeon'&&s.dpos&&DUNGEONS[s.dpos.did]) return DUNGEONS[s.dpos.did].name+(DUNGEONS[s.dpos.did].floors.length>1?' B'+(s.dpos.fi+1):''); if(s.mode==='town'&&TOWNS[s.town]) return TOWNS[s.town].name;
   if(s.pos&&s.v>=3){ const R=REGIONS[wRegion(s.pos.x,s.pos.y)]; if(R) return R.name; } }catch(e){} return 'World map'; }
 function continueLine(L){ const s=L.s; const h=s.chars&&s.chars.hero; return `${L.label} · ${escapeHtml(h?h.name:'?')} Lv ${h?h.lv:'?'} · ${escapeHtml(saveWhere(s))} · ${fmt(s.gold||0)}g · saved ${agoText(s.ts)}`; }
+
+// watchdog: an input lock with no dialog, menu, battle or animation behind it is stuck — release it
+{ let since=0; setInterval(()=>{ if(!G||!G.busy||B||MODALS.length||PANELS.length||(CAM.a&&performance.now()-CAM.a.t0<CAM.a.dur+200)){ since=0; return; } if(!since){ since=Date.now(); return; } if(Date.now()-since>2500){ G.busy=false; since=0; window.__unstuck=(window.__unstuck||0)+1; redraw(); } },500); }
 </script>
 </body></html>
